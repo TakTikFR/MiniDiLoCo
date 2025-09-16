@@ -1,1 +1,1 @@
-# MyDiLoCo
+# MiniDiLoCo
