@@ -4,6 +4,25 @@ from datasets import load_dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig, get_cosine_schedule_with_warmup, DataCollatorForLanguageModeling
 
+def apply_sync_algorithm(method_name: str, global_params, local_params_list):
+    aggregated_update = []
+    nb_workers = len(local_params_list)
+
+    if method_name == "basic":
+        # Compute the average of the deltas
+        for param_global, *params_local in zip(global_params, local_params_list):
+            deltas = [param_global.data - param_local.data for param_local in params_local]
+            avg = sum(deltas) / nb_workers                                                                      # Δ(t) ← average of ( θ(t-1) - θᵢ(t) ) for i=1...k
+            aggregated_update.append(avg)
+    elif method_name == "allreduce":
+        # Applt the sum of the deltas (AllReduce)
+        for param_global, *params_local in zip(global_params, local_params_list):
+            deltas = [param_global.data - param_local.data for param_local in params_local]
+            aggregated_update.append(sum(deltas))
+    else:
+        raise ValueError("Wrong Method name, should be 'basic' or 'allreduce'")
+    return aggregated_update
+
 
 def MiniDiLoCo(
         inner_lr: float = 2e-4,
@@ -112,15 +131,19 @@ def MiniDiLoCo(
             for p_global, p_local in zip(outer_model.parameters(), workers[0][0].parameters()):
                 print("Param difference norm:", (p_global-p_local).norm().item())
 
+        
         # Average the parameters
-        avg_delta = []
+        aggregated_update = []
         for param_global, *params_local in zip(outer_model.parameters(), *(m.parameters() for m in local_models)):
             deltas = [param_global.data - param_local.data for param_local in params_local]
             avg = sum(deltas) / k                                                                       # Δ(t) ← average of ( θ(t-1) - θᵢ(t) ) for i=1...k
             avg_delta.append(avg)
-
+        '''
+            
+        aggregated_update = apply_sync_algorithm("allreduce", list(outer_model.parameters()), [list(m.parameters()) for m in local_models])
+        '''
         # Apply the outer optimizer
-        for param, grad in zip(outer_model.parameters(), avg_delta):
+        for param, grad in zip(outer_model.parameters(), aggregated_update):
             param.grad = grad                                                                           # θ(t) ← OuterOpt( θ(t-1), Δ(t) )
         outer_optimizer.step()
         outer_optimizer.zero_grad()
