@@ -1,7 +1,6 @@
 import torch
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-from utils import all_reduce
+from aggregate import AllReduce
 
 class Trainer:
     """ Generic distributed PyTorch trainer """
@@ -23,6 +22,7 @@ class Trainer:
         """        
 
         strategy._init_node(self.model, self.rank, self.world_size, total_steps)
+        all_reduce = AllReduce(strategy.outer_opt, strategy.inner_opt)
         
         self.model.train()
 
@@ -41,7 +41,7 @@ class Trainer:
                 running_loss += loss
 
             # Parameters synchronisation
-            all_reduce(strategy.outer_opt, strategy.inner_opt)
+            all_reduce.aggregate()
 
             strategy.outer_opt.zero_grad()
             strategy.outer_opt.step()
